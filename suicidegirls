@@ -1,0 +1,86 @@
+#!/bin/bash -ue
+#
+# suicidegirls - Downloader for SuicideGirls albums
+#
+#    Copyright (C) 2016 Rodrigo Silva (MestreLion) <linux@rodrigosilva.com>
+#
+#    This program is free software: you can redistribute it and/or modify
+#    it under the terms of the GNU General Public License as published by
+#    the Free Software Foundation, either version 3 of the License, or
+#    (at your option) any later version.
+#
+#    This program is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#    GNU General Public License for more details.
+#
+#    You should have received a copy of the GNU General Public License
+#    along with this program. See <http://www.gnu.org/licenses/gpl.html>
+
+url='https://www.suicidegirls.com/api/get_album_info'
+
+message() { echo "$@" >&2; }
+usage()   { message "Usage: suicidegirls ALBUMID [SESSIONID] [CSRFTOKEN]"; exit 1; }
+
+myname="${0##*/}"
+mydir=$(dirname "$(readlink -f "$0")")
+config=${XDG_CONFIG_HOME:-$HOME/.config}/$myname.conf
+ok=0
+
+if [[ -r "$config" ]]; then
+	source "$config"
+fi
+
+album=${1:-}
+sessionid=${2:-$sessionid}
+csrftoken=${3:-$csrftoken}
+
+[[ "$album" ]] || usage
+
+if (($# > 1)); then
+	message "Saving cookies to '$config'"
+	cat > "$config" <<-EOF
+		rootdir=$(printf '%q' "${rootdir:-}")
+		sessionid=$(printf '%q' "${sessionid:-}")
+		csrftoken=$(printf '%q' "${csrftoken:-}")
+	EOF
+fi
+
+rootdir=${rootdir:-$mydir}
+cookies=${csrftoken:+"csrftoken=${csrftoken}; sessionid=${sessionid}"}
+path=$rootdir/$album
+finished=$rootdir/finished
+url=$url/$album
+
+if ! [[ "$cookies" ]]; then
+	message "Cookies not set, use SESSIONID and CSRFTOKEN arguments"
+	usage
+fi
+
+
+mkdir -p -- "$path"
+
+while read -r num url ; do
+	num=$(printf '%03d' "$num")
+	message "Saving photo $num"
+	wget -q -O "$path"/"$num".jpg "$url"
+	ok=1
+done < <({
+	wget -q --header "Cookie: $cookies" -O- -- "$url" |
+	python -m json.tool |
+	tee -- "$path"/"$album".json |
+	awk -F\"\|, '/^ +"number":/{n=substr($3, 3)} /^ +"original":/{print n, $4}'
+} )
+
+if !((ok)); then
+	message "Login failed. Update your cookies using SESSIONID argument"
+	usage
+fi
+
+mkdir -p -- "$finished"
+if [[ -d "$finished/$album" ]]; then
+	mv    -- "$path"/* "$finished/$album" &&
+	rmdir -- "$path"
+else
+	mv -- "$path" "$finished"
+fi
